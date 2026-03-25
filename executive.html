@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ENAMI EP - Visor Ejecutivo Nacional</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        #map { height: 100%; width: 100%; border-radius: 4rem; z-index: 1; }
+    </style>
+</head>
+<body class="bg-[#0a1128] text-white font-sans p-4 md:p-8 min-h-screen">
+    <div class="max-w-[1600px] mx-auto">
+        <header class="text-center mb-10">
+            <h1 class="text-5xl font-black italic tracking-tighter uppercase leading-none mb-3">Mapa de Proyectos Mineros de la ENAMI EP</h1>
+            <p class="text-sm font-bold text-blue-400 uppercase tracking-[0.6em] italic opacity-70">Visualización Estratégica Nacional</p>
+        </header>
+
+        <main class="grid grid-cols-1 lg:grid-cols-12 gap-12">
+            <!-- Mapa Ejecutivo -->
+            <div class="lg:col-span-8">
+                <div class="bg-white/5 rounded-[4.5rem] border border-white/10 p-12 relative overflow-hidden shadow-[0_40px_100px_rgba(0,0,0,0.6)] flex items-center justify-center min-h-[650px]">
+                    <div id="map"></div>
+                </div>
+            </div>
+
+            <!-- Ficha Detallada -->
+            <div class="lg:col-span-4 flex flex-col gap-8 h-[80vh]">
+                <div id="detailPane" class="bg-white p-12 rounded-[4.5rem] text-slate-900 shadow-2xl flex flex-col h-full hidden animate-in zoom-in-95 duration-500">
+                    <div class="flex justify-between items-start mb-8">
+                        <div class="flex items-center gap-2">
+                            <div class="w-2 h-2 rounded-full bg-blue-600 animate-pulse"></div>
+                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-400 italic">Expediente Estratégico</span>
+                        </div>
+                        <button id="closePaneBtn" class="text-slate-200 hover:text-slate-800 transition-colors"><i data-lucide="x" class="w-7 h-7"></i></button>
+                    </div>
+                    
+                    <h2 id="projTitle" class="text-4xl font-black uppercase tracking-tighter leading-tight mb-4 italic"></h2>
+                    
+                    <div id="concessionsList" class="flex-1 overflow-y-auto pr-4 custom-scrollbar space-y-8 mb-12"></div>
+
+                    <div class="space-y-3">
+                        <button id="exportBtn" class="w-full bg-slate-900 text-white py-6 rounded-[3rem] font-black text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-2xl hover:bg-black active:scale-95 transition-all">
+                            <i data-lucide="download" class="w-5 h-5"></i> Generar reporte del proyecto minero
+                        </button>
+                        <button id="downloadJsonBtn" class="w-full bg-slate-100 text-slate-500 py-3 rounded-2xl font-black text-[9px] uppercase tracking-widest hover:bg-slate-200 flex items-center justify-center gap-2">
+                            <i data-lucide="code" class="w-3 h-3"></i> Exportar datos en JSON
+                        </button>
+                    </div>
+                </div>
+
+                <div id="emptyPane" class="bg-white/5 border-2 border-dashed border-white/10 rounded-[5rem] p-12 text-center flex flex-col items-center justify-center h-full text-white/10">
+                    <i data-lucide="layout-dashboard" class="w-24 h-24 opacity-5 mb-8"></i>
+                    <p class="text-[10px] font-black uppercase tracking-[0.5em] leading-relaxed max-w-[240px] mx-auto italic">Seleccione un activo en el mapa para visualizar la información técnica</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Plantilla PDF Oculta -->
+    <div style="position: absolute; left: -9999px; top: -9999px;">
+        <div id="report-template" style="padding: 40px; background: #fff; width: 210mm; min-height: 297mm; color: #1e293b; font-family: Arial, sans-serif;">
+            <div style="border-bottom: 6px solid #1e3a8a; padding-bottom: 25px; margin-bottom: 35px; display: flex; justify-content: space-between; align-items: center;">
+                <h1 style="margin: 0; fontSize: 38px; fontWeight: 900; color: #1e3a8a; letterSpacing: -2px; fontStyle: italic;">ENAMI EP</h1>
+                <div style="text-align: right;">
+                    <h2 style="margin: 0; fontSize: 18px; fontWeight: 900; textTransform: uppercase; color: #1e3a8a;">Reporte de Proyecto</h2>
+                    <p style="margin: 0; fontSize: 9px; color: #64748b; fontWeight: bold; letterSpacing: 3px; textTransform: uppercase;">Ficha Técnica Oficial</p>
+                </div>
+            </div>
+            <div id="report-content"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, onSnapshot, query, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // Nota: Si usas esto fuera de este entorno, reemplaza con tu config real de Firebase
+        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
+        const appId = window.__app_id || 'enami-online-v1';
+        const initialToken = window.__initial_auth_token;
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        let projects = [];
+        let selectedProject = null;
+        let map, projectMarkers = {};
+
+        lucide.createIcons();
+
+        function initMap() {
+            map = L.map('map', { zoomControl: false, attributionControl: false }).setView([-1.83, -78.18], 7);
+            L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png').addTo(map);
+            L.control.zoom({ position: 'bottomright' }).addTo(map);
+        }
+
+        const initAuth = async () => {
+            try {
+                if (initialToken) await signInWithCustomToken(auth, initialToken);
+                else await signInAnonymously(auth);
+            } catch (error) { console.error("Auth failed:", error); }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) loadProjects();
+        });
+
+        function loadProjects() {
+            const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'projects'));
+            onSnapshot(q, (snapshot) => {
+                projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                syncMarkers();
+            });
+        }
+
+        function syncMarkers() {
+            Object.values(projectMarkers).forEach(m => map.removeLayer(m));
+            projectMarkers = {};
+            projects.forEach(p => {
+                const isSelected = selectedProject?.id === p.id;
+                const m = L.circleMarker([p.lat, p.lng], {
+                    radius: isSelected ? 12 : 8,
+                    color: isSelected ? '#f97316' : '#3b82f6',
+                    fillColor: isSelected ? '#f97316' : '#3b82f6',
+                    fillOpacity: 0.8,
+                    weight: isSelected ? 4 : 2
+                }).addTo(map);
+                m.on('click', () => showDetail(p));
+                projectMarkers[p.id] = m;
+            });
+        }
+
+        function showDetail(p) {
+            selectedProject = p;
+            document.getElementById('detailPane').classList.remove('hidden');
+            document.getElementById('emptyPane').classList.add('hidden');
+            document.getElementById('projTitle').textContent = p.name;
+            
+            const list = document.getElementById('concessionsList');
+            list.innerHTML = '';
+            (p.concessions || []).forEach((con, idx) => {
+                const div = document.createElement('div');
+                div.className = "p-10 bg-slate-50 rounded-[3.5rem] border-2 border-slate-100 space-y-6";
+                div.innerHTML = `
+                    <div class="flex justify-between items-center border-b-2 border-slate-200 pb-4">
+                        <p class="text-[11px] font-black text-blue-600 uppercase tracking-widest italic">Concesión #${idx + 1}</p>
+                        <span class="text-[10px] font-black text-slate-400 uppercase italic tracking-tighter">${con.name || 'Sin nombre'}</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-x-8 gap-y-6">
+                        <div><p class="text-[9px] font-black text-slate-400 uppercase mb-1.5 tracking-tighter">Cód. Catastral</p><p class="text-sm font-black italic text-slate-800">${con.cadastralCode || 'N/A'}</p></div>
+                        <div><p class="text-[9px] font-black text-slate-400 uppercase mb-1.5 tracking-tighter">Superficie</p><p class="text-sm font-black italic text-slate-800">${con.surface || '0'} Ha</p></div>
+                        <div class="col-span-2 pt-4 border-t border-slate-200">
+                            <p class="text-[10px] font-black text-slate-400 uppercase mb-3 italic tracking-widest">Ubicación</p>
+                            <p class="text-[11px] font-bold text-slate-700">${con.province || '-'} • ${con.canton || '-'} • ${con.parish || '-'}</p>
+                        </div>
+                        <div class="col-span-2 pt-4 border-t border-slate-200">
+                            <p class="text-[10px] font-black text-slate-400 uppercase mb-3 italic tracking-widest">Recursos Minerales</p>
+                            <div class="flex flex-wrap gap-2">${(con.minerals || []).map(m => `<span class="bg-blue-600 text-white px-3 py-1 rounded-xl text-[9px] font-black uppercase shadow-lg">${m}</span>`).join('')}</div>
+                        </div>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+            syncMarkers();
+            map.panTo([p.lat, p.lng]);
+        }
+
+        document.getElementById('closePaneBtn').onclick = () => {
+            selectedProject = null;
+            document.getElementById('detailPane').classList.add('hidden');
+            document.getElementById('emptyPane').classList.remove('hidden');
+            syncMarkers();
+        };
+
+        document.getElementById('downloadJsonBtn').onclick = () => {
+            if(!selectedProject) return;
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(selectedProject, null, 2));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            downloadAnchorNode.setAttribute("download", `proyecto_${selectedProject.name.toLowerCase().replace(/ /g,"_")}.json`);
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+        };
+
+        document.getElementById('exportBtn').onclick = () => {
+            if(!selectedProject) return;
+            const content = document.getElementById('report-content');
+            content.innerHTML = `
+                <h3 style="font-size: 24px; font-weight: 900; color: #0f172a; margin-bottom: 30px; text-transform: uppercase;">${selectedProject.name}</h3>
+                ${(selectedProject.concessions || []).map((con, i) => `
+                    <div style="border: 1px solid #e2e8f0; padding: 25px; border-radius: 30px; margin-bottom: 25px;">
+                        <h4 style="font-size: 13px; font-weight: 900; border-bottom: 2px solid #f1f5f9; padding-bottom: 10px; color: #1e3a8a; text-transform: uppercase;">CONCESIÓN: ${con.name}</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; font-size: 11px; margin-top: 15px;">
+                            <div>
+                                <p><strong>Código Catastral:</strong> ${con.cadastralCode || 'N/A'}</p>
+                                <p><strong>Superficie:</strong> ${con.surface || '0'} Ha</p>
+                                <p><strong>Régimen:</strong> ${con.regime || 'N/A'}</p>
+                            </div>
+                            <div>
+                                <p><strong>Ubicación:</strong> ${con.province} / ${con.canton}</p>
+                                <p><strong>Minerales:</strong> ${(con.minerals || []).join(', ')}</p>
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+            html2pdf().from(document.getElementById('report-template')).save(`Reporte_ENAMI_${selectedProject.name}.pdf`);
+        };
+
+        window.onload = () => { initMap(); initAuth(); };
+    </script>
+</body>
+</html>
